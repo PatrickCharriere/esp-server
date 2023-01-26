@@ -1,4 +1,3 @@
-
 using namespace std;
 #include <string>
 #include <ReactESP.h>
@@ -11,25 +10,30 @@ using namespace std;
 #include <SPIFFS.h>
 #include <fstream>
 #include <stdio.h>
-
+#include "pitches.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
-// GPIOs
+
+
+
+///////////////////////////////////////////////////////////////////////// GPIOs
 #define WiFi_LED_PIN 4
 #define PROCESSING_LED_PIN 0
 #define STATUS_OK_LED_PIN 2
 #define ERROR_LED_PIN 15
+#define BUZZER_PIN 5
 
+
+///////////////////////////////////////////////////////////////////////// OLED DISPLAY
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define SCREEN_WIDTH 128 // Display width (px)
+#define SCREEN_HEIGHT 64 // Display height (px)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// WiFi Constants
+///////////////////////////////////////////////////////////////////////// WiFi
 const char* ssid     = "WiFi-14FE";
 const char* password = "205.easternStar";
-
 enum WIFI_STATUS { CONNECTING, CONNECTED };
 WIFI_STATUS wifiStatus = CONNECTING;
 enum MODULE_STATUS { GOOD, KO };
@@ -37,14 +41,16 @@ MODULE_STATUS moduleStatus = GOOD;
 enum MODULE_PROCESSING { PROCESSING, INACTIVE };
 MODULE_PROCESSING moduleProcessing = INACTIVE;
 
-// AsyncWebServer object on port 80
-AsyncWebServer server(80);
 
+///////////////////////////////////////////////////////////////////////// WEB SERVER
+AsyncWebServer server(80);
 // Asynchronous processes
 using namespace reactesp;
 ReactESP app;
+// Variable to store the HTTP req  uest
+String header;
 
-// setting PWM properties
+///////////////////////////////////////////////////////////////////////// PWM
 int dutyCycle = 0;
 const int redLedPin = 12;  // RED
 const int greenLedPin = 13;  // GREEN
@@ -54,8 +60,6 @@ const int redChannel = 0;
 const int greenChannel = 1;
 const int blueChannel = 2;
 const int resolution = 8;
-
-// Decode HTTP GET value
 String redString = "0";
 String greenString = "0";
 String blueString = "0";
@@ -63,19 +67,10 @@ int pos1 = 0;
 int pos2 = 0;
 int pos3 = 0;
 int pos4 = 0;
-
-// Variable to store the HTTP req  uest
-String header;
-// Current time
-unsigned long currentTime = millis();
-// Previous time
-unsigned long previousTime = 0; 
-// Define timeout time in milliseconds (example: 2000ms = 2s)
-const long timeoutTime = 2000;
 const char* PARAM_MESSAGE = "rgb";
 
 
-////////////////////////////////////////// INTERNET TIME
+///////////////////////////////////////////////////////////////////////// INTERNET TIME
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -86,7 +81,6 @@ String timeStamp;
 void initialiseTime(void) {
     // Initialize a NTPClient to get time
     timeClient.begin();
-    
     // Set offset time in seconds to adjust for the timezone
     // GMT +1 = 3600
     // GMT +10 = 36000
@@ -95,21 +89,17 @@ void initialiseTime(void) {
     timeClient.setTimeOffset(39600);
 }
 void getTime(void) {
-  //Serial.println("getEpochTime - " + timeClient.getEpochTime());
-
   timeClient.forceUpdate();
   //format hh:mm:ss
   formattedTime = timeClient.getFormattedTime();
   //Serial.println(formattedTime);
-
   return;
 }
-////////////////////////////////////////// INTERNET TIME END
 
-////////////////////////////////////////// FILE SAVE
+
+///////////////////////////////////////////////////////////////////////// FILEs
 void writeInFile(String filename, String value) {
-
-  String time = formattedTime.substring(0, 5);
+  unsigned long timestamp = timeClient.getEpochTime();
 
   Serial.print("Opening file: ");
   Serial.println(filename);
@@ -118,14 +108,14 @@ void writeInFile(String filename, String value) {
       Serial.println("There was an error opening the file for writing");
       return;
   }
-  if(file.println(time + " - " + value)) {
+  file.print(timestamp); 
+  if(file.println("-" + value)) {
     Serial.println("File was written");
   } else {
       Serial.println("File write failed");
   }
 	
   file.close();
-  
 }
 void listAllFiles(void) {
   File root = SPIFFS.open("/");
@@ -149,22 +139,20 @@ void initFileSytem(void) {
   }
   listAllFiles();
 }
-////////////////////////////////////////// FILE SAVE END
 
 
 
-
-////////////////////////////////////////// TEMPERATURE
-// Temperature calculation constants
-// GPIO where the DS18B20 is connected to
+///////////////////////////////////////////////////////////////////////// TEMPERATURE
+const float maxTempWarning = 25.5;
 const int oneWireBus = 4;     
-// Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(oneWireBus);
-// Pass our oneWire reference to Dallas Temperature sensor 
 DallasTemperature sensors(&oneWire);
 float temperatureC = 0;
 String temperatureString = "";
-////////////////////////////////////////// TEMPERATURE END
+
+
+
+
 
 void initDebug() {
   // Serial port for debugging purposes
@@ -200,30 +188,11 @@ void updateTemperature() {
 }
 
 void startAsyncProcesses() {
-
-  /*app.onRepeat(3, [] () {
-
-    // increase the LED brightness
-    if((dutyCycle >= 0) && (dutyCycle <= 255)){   
-      // changing the LED brightness with PWM
-      ledcWrite(ledChannel, dutyCycle);
-      dutyCycle++;
-      return;
-    }
-
-    // decrease the LED brightness
-    if((dutyCycle >= 255) && (dutyCycle <= 512)){
-      // changing the LED brightness with PWM
-      ledcWrite(ledChannel, (512 - dutyCycle));
-      dutyCycle++;
-      if(dutyCycle > 512) dutyCycle = 0;
-      return;
-    }
-
-  });*/
+  bool buzz = true;
 
   // LED blinking processes
   app.onRepeat(100, [] () {
+
     switch (wifiStatus) {
       case CONNECTING:
         static bool state = LOW;
@@ -255,8 +224,28 @@ void startAsyncProcesses() {
         digitalWrite(PROCESSING_LED_PIN, LOW);
         break;
     }
+
   });
 
+  app.onRepeat(200, [] () {
+    
+    static bool buzzing = false;
+
+    // Temperature monitoring process
+    if(temperatureC >= maxTempWarning) {
+
+      if(buzzing) {
+        noTone(BUZZER_PIN);
+      } else {
+        tone(BUZZER_PIN, NOTE_A4);
+      }
+      buzzing = !buzzing;
+
+    } else {
+      noTone(BUZZER_PIN);
+    }
+
+  });
 
   app.onRepeat(1000, [] () {
     //get time every second
@@ -282,7 +271,7 @@ void startAsyncProcesses() {
 void setup() {
   
   Wire.begin();
-
+  pinMode(BUZZER_PIN, OUTPUT);
   pinMode(WiFi_LED_PIN, OUTPUT);
   pinMode(PROCESSING_LED_PIN, OUTPUT);
   pinMode(STATUS_OK_LED_PIN, OUTPUT);
@@ -297,8 +286,8 @@ void setup() {
   initDebug();
   wifiConnect();
 
-  /////////////////////////////////////////// FILE READING
   initialiseTime();
+  getTime();
   initFileSytem();
 
   // configure LED PWM functionalitites
@@ -363,12 +352,10 @@ void setup() {
   display.setTextColor(WHITE);
 
   updateTemperature();
-
 }
 
 void loop(){
   app.tick();
-
 }
 
 
