@@ -7,7 +7,7 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software. -->
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://code.highcharts.com/highcharts.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.18.0.min.js"></script>
   <link rel="icon" href="data:,"/>
   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css"/>
   <style>
@@ -27,17 +27,14 @@ copies or substantial portions of the Software. -->
 </head>
 <body>
   <h2>Smart Home Station</h2>
-  <div id="chart-temperature" class="container"></div>
 
-  <div class="container">
+  <div id="tester" style="width:600px;height:250px;"></div>
+
+  <!--<div class="container">
     <div class="row"><h1>ESP Color Picker</h1></div>
     <a class="btn btn-primary btn-lg" id="change_color" onclick="sendRequest();" role="button">Change Color</a>
     <input class="jscolor {onFineChange:'update(this)'}" id="rgb">
-  </div>
-
-  <div id="demo">
-
-  </div>
+  </div>-->
 
 </body>
 <script>
@@ -65,46 +62,52 @@ copies or substantial portions of the Software. -->
   }
   </script>
 <script>
-var chartT = new Highcharts.Chart({
-  chart:{ renderTo : 'chart-temperature' },
-  title: { text: 'BME280 Temperature' },
-  series: [{
-    showInLegend: false,
-    data: []
-  }],
-  plotOptions: {
-    line: { animation: false,
-      dataLabels: { enabled: true }
-    },
-    series: { color: '#059e8a' }
-  },
-  xAxis: { type: 'datetime',
-    dateTimeLabelFormats: { second: '%H:%M:%S' }
-  },
-  yAxis: {
-    title: { text: 'Temperature (Celsius)' }
-    //title: { text: 'Temperature (Fahrenheit)' }
-  },
-  credits: { enabled: false }
-});
-setInterval(function ( ) {
+
+function getTemp() {
+
   var xhttp = new XMLHttpRequest();
   xhttp.onreadystatechange = function() {
-    if (this.readyState == 4 && this.status == 200) {
-      var x = (new Date()).getTime(),
-          y = parseFloat(this.responseText);
-      console.log(this.responseText);
-      if(chartT.series[0].data.length > 40) {
-        chartT.series[0].addPoint([x, y], true, true, true);
-      } else {
-        chartT.series[0].addPoint([x, y], true, false, true);
-      }
-    }
-  };
-  xhttp.open("GET", "/temperature", true);
-  xhttp.send();
-}, 3000 ) ;
 
+    if (this.readyState == 4 && this.status == 200) {
+      let rawResponse = this.responseText.split('\r\n'), i = 0;
+      let x = [], y = [];
+
+      while(rawResponse[i]) {
+        let date = new Date((rawResponse[i].split('-')[0] - 39600) * 1000);
+
+        console.log(date.getFullYear() + '-' + date.getMonth() + '-' + date.getDate() + ' ' + date.toLocaleTimeString());
+
+        x.push(date)
+        y.push(parseFloat(rawResponse[i].split('-')[1]))
+        i++;
+        
+      }
+
+      updatePlot(x, y);
+    }
+
+  };
+
+  xhttp.open("GET", "http://124.171.138.253/temperature", true);
+  xhttp.send();
+
+}
+
+function updatePlot(x, y) {
+
+  TESTER = document.getElementById('tester');
+  let data = [{
+    x: x,
+    y: y,
+    type: 'scatter'
+  }];
+
+	Plotly.newPlot( TESTER, data );
+
+}
+
+getTemp();
+setInterval(getTemp, 30 * 1000)
 
 </script>
 </html>
