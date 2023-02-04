@@ -22,6 +22,7 @@ using namespace std;
 #define STATUS_OK_LED_PIN 2
 #define ERROR_LED_PIN 15
 #define BUZZER_PIN 5
+#define FAN_PIN 18
 
 
 ///////////////////////////////////////////////////////////////////////// OLED DISPLAY
@@ -143,12 +144,14 @@ void initFileSytem(void) {
 
 
 ///////////////////////////////////////////////////////////////////////// TEMPERATURE
-const float maxTempWarning = 25.5;
+const float temperatureHighThresold = 25.5;
+const float temperatureLowThresold = 24;
 const int oneWireBus = 4;     
 OneWire oneWire(oneWireBus);
 DallasTemperature sensors(&oneWire);
 float temperatureC = 0;
 String temperatureString = "";
+const int intervalSecControlTemperature = 60;
 
 
 
@@ -230,21 +233,42 @@ void startAsyncProcesses() {
   app.onRepeat(200, [] () {
     
     static bool buzzing = false;
+    static float previousTempWarning = false;
+    static bool temperatureHighWarning = false;
 
     // Temperature monitoring process
-    if(temperatureC >= maxTempWarning) {
+    if( (!temperatureHighWarning) && (temperatureC >= temperatureHighThresold)) {
 
-      if(buzzing) {
-        noTone(BUZZER_PIN);
-      } else {
-        tone(BUZZER_PIN, NOTE_A4);
-      }
-      buzzing = !buzzing;
 
-    } else {
-      noTone(BUZZER_PIN);
+      Serial.println("Temperature HIGH Warning");
+      temperatureHighWarning = true;
+      // if(buzzing) {
+      //   noTone(BUZZER_PIN);
+      // } else {
+      //   tone(BUZZER_PIN, NOTE_A4);
+      // }
+      // buzzing = !buzzing;
+
+    } else if ( (temperatureHighWarning) && (temperatureC <= temperatureLowThresold)) {
+
+      Serial.println("Temperature LOW");
+      //noTone(BUZZER_PIN);
+      temperatureHighWarning = false;
+      
     }
 
+    if(previousTempWarning != temperatureHighWarning) {
+
+      previousTempWarning = temperatureHighWarning;
+
+      if(temperatureHighWarning) {
+        digitalWrite(FAN_PIN, LOW);
+      } else {
+        digitalWrite(FAN_PIN, HIGH);
+      }
+      
+    }
+      
   });
 
   app.onRepeat(1000, [] () {
@@ -262,7 +286,7 @@ void startAsyncProcesses() {
     display.display();
   });
 
-  app.onRepeat(10000, [] () {
+  app.onRepeat(intervalSecControlTemperature * 1000, [] () {
     updateTemperature();
   });
 }
@@ -276,6 +300,8 @@ void setup() {
   pinMode(PROCESSING_LED_PIN, OUTPUT);
   pinMode(STATUS_OK_LED_PIN, OUTPUT);
   pinMode(ERROR_LED_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT);
+  digitalWrite(FAN_PIN, HIGH); //Disable at start
   moduleStatus = GOOD;
   moduleProcessing = INACTIVE;
 
@@ -302,6 +328,7 @@ void setup() {
   // Print ESP32 Local IP Address
   Serial.println(WiFi.localIP());
 
+  
   // Route for root / web page
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(SPIFFS, "/index.html");
@@ -340,6 +367,7 @@ void setup() {
   sensors.setResolution(0x7F);
 
   // Start server
+  DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
   server.begin();
 
 
