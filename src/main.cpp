@@ -13,6 +13,7 @@ using namespace std;
 #include "pitches.h"
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <AsyncElegantOTA.h>
 
 
 ///////////////////////////////////////////////////////////////////////// e-MAIL
@@ -157,6 +158,7 @@ void initDebug() {
 
 bool wifiConnect() {
 
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 
   Serial.println("Connecting to WiFi..");
@@ -164,8 +166,11 @@ bool wifiConnect() {
     Serial.print(".");
     delay(200);
   }
+
+  AsyncElegantOTA.begin(&server);
   Serial.println(String("Connected to WiFi ") + String(ssid));
   digitalWrite(WiFi_LED_PIN, HIGH);
+
   return 0;
 
 }
@@ -401,7 +406,9 @@ void setup() {
   server.on("/color", HTTP_GET, [](AsyncWebServerRequest *request) { updateLedColor(request); } );
   server.on("/setTemperatureParams", HTTP_GET, [](AsyncWebServerRequest *request) { setTemperatureParamsByWeb(request); } );
   server.on("/setNetworkParams", HTTP_GET, [](AsyncWebServerRequest *request) { setNetworkParamsByWeb(request); } );
-    
+
+  server.serveStatic("/", SPIFFS, "/");
+  
   Serial.println("Start the DS18B20 sensor");
   sensors.begin();
   sensors.setResolution(0x7F);
