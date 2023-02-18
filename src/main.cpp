@@ -15,6 +15,15 @@ using namespace std;
 #include <DallasTemperature.h>
 #include <AsyncElegantOTA.h>
 
+#include <ArduinoJson.h>
+#include <ArduinoJson.hpp>
+#include <PubSubClient.h>
+
+const char* mqtt_server = "192.168.1.113";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
 
 ///////////////////////////////////////////////////////////////////////// e-MAIL
 // #define SMTP_HOST "smtp.gmail.com"
@@ -68,7 +77,9 @@ int pos1 = 0;
 int pos2 = 0;
 int pos3 = 0;
 int pos4 = 0;
-const char* PARAM_MESSAGE = "rgb";
+const char* RGB_PARAM_MESSAGE = "rgb";
+const char* FAN_ON_PARAM_MESSAGE = "forceFanOn";
+const char* LOW_TEMP_THRESHOLD_MESSAGE = "lowTempThreshold";
 
 
 ///////////////////////////////////////////////////////////////////////// INTERNET TIME
@@ -140,14 +151,17 @@ void initFileSytem(void) {
 
 
 ///////////////////////////////////////////////////////////////////////// TEMPERATURE
-const float temperatureHighThresold = 25.5;
-const float temperatureLowThresold = 24;
+float temperatureHighThresold = 25.5;
+float temperatureLowThresold = 24;
+const int maxTemperatureBoundary = 30, minTemperatureBoundary = 20;
 const int oneWireBus = 4;     
 OneWire oneWire(oneWireBus);
 DallasTemperature sensors(&oneWire);
 float temperatureC = 0;
 String temperatureString = "";
-const int intervalSecControlTemperature = 60;
+const int intervalReadSensorsSec = 10;
+const int intervalWriteSensorsSec = 300;
+String timeStampEndForceFanOn = "0";
 
 
 void initDebug() {
@@ -177,25 +191,46 @@ bool wifiConnect() {
 
 void updateTemperature() {
 
-  Serial.println("temp reading");
+  Serial.println("Temperature reading");
   sensors.requestTemperatures(); 
 
   temperatureC = sensors.getTempCByIndex(0);
+  temperatureString = String(temperatureC, 1);
+
   Serial.print(temperatureC);
   Serial.println("ºC");
 
-  temperatureString = String(temperatureC, 1);
+}
+
+void writeSensors() {
+
   writeInFile("/temp.txt", temperatureString.c_str());
 
 }
+
+void readSensors() {
+
+  updateTemperature();
+
+  StaticJsonDocument<80> doc;
+  char output[80];
+
+  doc["t"] = temperatureC;
+
+  serializeJson(doc, output);
+  Serial.println(output);
+  client.publish("/home/sensors", output);
+
+}
+
 
 void updateLedColor(AsyncWebServerRequest *request) {
   String colors[3];
 
   Serial.println("RGB request ___");
 
-  if (request->hasParam(PARAM_MESSAGE)) {
-    String paramString = request->getParam(PARAM_MESSAGE)->value();
+  if (request->hasParam(RGB_PARAM_MESSAGE)) {
+    String paramString = request->getParam(RGB_PARAM_MESSAGE)->value();
 
     colors[0] = paramString.substring(0, paramString.indexOf(','));
     colors[1] = paramString.substring(paramString.indexOf(',')+1, paramString.lastIndexOf(','));
@@ -219,14 +254,20 @@ void setTemperatureParamsByWeb(AsyncWebServerRequest *request) {
 
   Serial.println("Update Temperature params web request ___");
 
-  if (request->hasParam(PARAM_MESSAGE)) {
-    String paramString = request->getParam(PARAM_MESSAGE)->value();
+  if (request->hasParam(LOW_TEMP_THRESHOLD_MESSAGE)) {
+    String paramString = request->getParam(LOW_TEMP_THRESHOLD_MESSAGE)->value();
+    float newLowThreshold = paramString.toInt() / 10;
 
-    paramString.substring(0, paramString.indexOf(','));
+    Serial.print("newLowThreshold = ");
+    Serial.print(newLowThreshold);
+    Serial.println("ºC");
     
-    Serial.println(paramString);
+    if((minTemperatureBoundary < newLowThreshold) && (newLowThreshold < maxTemperatureBoundary) ) {
+      temperatureLowThresold = newLowThreshold;
+    }
+
   } else {
-      Serial.println("No params found");
+    Serial.println("No params found");
   }
   request->send_P(200, "text/plain", "Update Temperature params request received");
 
@@ -236,8 +277,8 @@ void setNetworkParamsByWeb(AsyncWebServerRequest *request) {
 
   Serial.println("Update Network params web request ___");
 
-  if (request->hasParam(PARAM_MESSAGE)) {
-    String paramString = request->getParam(PARAM_MESSAGE)->value();
+  if (request->hasParam(RGB_PARAM_MESSAGE)) {
+    String paramString = request->getParam(RGB_PARAM_MESSAGE)->value();
 
     paramString.substring(0, paramString.indexOf(','));
     
@@ -249,7 +290,7 @@ void setNetworkParamsByWeb(AsyncWebServerRequest *request) {
 
 }
 
-void monitorTemperature(void) {
+void monitorTemperatureWithFan(void) {
 
     static float previousTempWarning = false;
     static bool temperatureHighWarning = false;
@@ -358,19 +399,39 @@ void setupEmailParameters(void) {
 
 }*/
 
+void reconnectMQTT() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      delay(5000);
+    }
+  }
+}
+
 void startAsyncProcesses() {
 
   //Every second
   app.onRepeat(1000, [] () {
     getTime();
-    monitorTemperature();
+    monitorTemperatureWithFan();
     refreshDisplay();
   });
 
-  app.onRepeat(intervalSecControlTemperature * 1000, [] () { updateTemperature(); });
+  app.onRepeat(intervalReadSensorsSec * 1000, [] () { readSensors(); });
 
-  //Every Day
-  app.onRepeat(24 * 60 * 60 * 1000, [] () { forceTimeUpdate(); });
+  app.onRepeat(intervalWriteSensorsSec * 1000, [] () { writeSensors(); });
+
+  //Every Half-Day
+  app.onRepeat(12 * 60 * 60 * 1000, [] () { forceTimeUpdate(); });
 
 }
 
@@ -408,7 +469,7 @@ void setup() {
   server.on("/setNetworkParams", HTTP_GET, [](AsyncWebServerRequest *request) { setNetworkParamsByWeb(request); } );
 
   server.serveStatic("/", SPIFFS, "/");
-  
+
   Serial.println("Start the DS18B20 sensor");
   sensors.begin();
   sensors.setResolution(0x7F);
@@ -430,10 +491,16 @@ void setup() {
   getTime();
   updateTemperature();
 
+  client.setServer(mqtt_server, 1883);
   //setupEmailParameters();
 
 }
 
 void loop(){
   app.tick();
+
+  if (!client.connected()) {
+    reconnectMQTT();
+  }
+
 }
